@@ -18,8 +18,9 @@ import com.cloudnative.ms_notifications.DTO.Message;
 @Service
 public class NotificationStreams {
 
-    // El frontend reconecta al expirar, con un token fresco.
-    private static final long TIMEOUT = Duration.ofMinutes(30).toMillis();
+    // detenemos el stream a los 10seg para evitar 503 ya q el api gateway no
+    // soporta streams
+    private static final long TIMEOUT = Duration.ofSeconds(10).toMillis();
 
     private final Map<String, Set<SseEmitter>> streams = new ConcurrentHashMap<>();
 
@@ -28,7 +29,11 @@ public class NotificationStreams {
         Set<SseEmitter> userStreams = streams.computeIfAbsent(user, u -> ConcurrentHashMap.newKeySet());
         userStreams.add(emitter);
         emitter.onCompletion(() -> userStreams.remove(emitter));
-        emitter.onTimeout(() -> userStreams.remove(emitter));
+        emitter.onTimeout(() -> {
+            userStreams.remove(emitter);
+            // Sin complete(), Spring responde el timeout con 503.
+            emitter.complete();
+        });
         emitter.onError(e -> userStreams.remove(emitter));
         return emitter;
     }

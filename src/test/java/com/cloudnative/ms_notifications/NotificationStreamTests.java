@@ -2,20 +2,26 @@ package com.cloudnative.ms_notifications;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.time.Instant;
 
+import jakarta.servlet.AsyncEvent;
+import jakarta.servlet.AsyncListener;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.mock.web.MockAsyncContext;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 
 import com.cloudnative.ms_notifications.DTO.Message;
 import com.cloudnative.ms_notifications.Service.NotificationStreams;
@@ -54,6 +60,23 @@ class NotificationStreamTests {
         String body = result.getResponse().getContentAsString();
         assertThat(body).contains("event:notification").contains("Pedido #2 recibido")
                 .doesNotContain("Pedido #1 recibido");
+    }
+
+    @Test
+    void streamClosesCleanlyOnTimeout() throws Exception {
+        when(decoder.decode("alice")).thenReturn(Jwt.withTokenValue("alice").header("alg", "RS256")
+                .subject("alice").issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(300)).build());
+
+        MvcResult result = mvc.perform(get(URL).header("Authorization", "Bearer alice"))
+                .andExpect(request().asyncStarted()).andReturn();
+
+        MockAsyncContext ctx = (MockAsyncContext) result.getRequest().getAsyncContext();
+        for (AsyncListener listener : ctx.getListeners()) {
+            listener.onTimeout(new AsyncEvent(ctx));
+        }
+
+        // Si el timeout termina en 503, API Gateway lo reenvia y el frontend lo ve como error.
+        mvc.perform(asyncDispatch(result)).andExpect(status().isOk());
     }
 
     @Test
