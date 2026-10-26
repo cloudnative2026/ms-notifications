@@ -80,6 +80,35 @@ class NotificationStreamTests {
     }
 
     @Test
+    void streamClosesRightAfterNotification() throws Exception {
+        when(decoder.decode("dave")).thenReturn(Jwt.withTokenValue("dave").header("alg", "RS256")
+                .subject("dave").issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(300)).build());
+
+        MvcResult result = mvc.perform(get(URL).header("Authorization", "Bearer dave"))
+                .andExpect(request().asyncStarted()).andReturn();
+
+        streams.send("dave", message("dave", "Pedido #3 recibido"));
+
+        // Sin timeout: la respuesta ya termino y API Gateway puede entregarla.
+        mvc.perform(asyncDispatch(result)).andExpect(status().isOk());
+        assertThat(result.getResponse().getContentAsString()).contains("Pedido #3 recibido");
+    }
+
+    @Test
+    void notificationSentWhileReconnectingIsDeliveredOnNextStream() throws Exception {
+        when(decoder.decode("carol")).thenReturn(Jwt.withTokenValue("carol").header("alg", "RS256")
+                .subject("carol").issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(300)).build());
+
+        streams.send("carol", message("carol", "Pedido #4 recibido"));
+
+        MvcResult result = mvc.perform(get(URL).header("Authorization", "Bearer carol"))
+                .andExpect(request().asyncStarted()).andReturn();
+
+        mvc.perform(asyncDispatch(result)).andExpect(status().isOk());
+        assertThat(result.getResponse().getContentAsString()).contains("Pedido #4 recibido");
+    }
+
+    @Test
     void messageWithoutUserIsIgnored() {
         streams.send(null, message(null, "sin usuario"));
     }

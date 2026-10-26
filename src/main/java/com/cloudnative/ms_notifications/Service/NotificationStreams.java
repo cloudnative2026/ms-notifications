@@ -2,6 +2,9 @@ package com.cloudnative.ms_notifications.Service;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -24,8 +27,17 @@ public class NotificationStreams {
 
     private final Map<String, Set<SseEmitter>> streams = new ConcurrentHashMap<>();
 
-    public SseEmitter open(String user) {
+    // Avisos que llegaron mientras el usuario no tenia stream abierto (p. ej.
+    // reconectando).
+    private final Map<String, List<Message>> pending = new HashMap<>();
+
+    public synchronized SseEmitter open(String user) {
         SseEmitter emitter = new SseEmitter(TIMEOUT);
+        List<Message> queued = pending.remove(user);
+        if (queued != null) {
+            deliver(emitter, queued);
+            return emitter;
+        }
         Set<SseEmitter> userStreams = streams.computeIfAbsent(user, u -> ConcurrentHashMap.newKeySet());
         userStreams.add(emitter);
         emitter.onCompletion(() -> userStreams.remove(emitter));
@@ -38,16 +50,31 @@ public class NotificationStreams {
         return emitter;
     }
 
-    public void send(String user, Message m) {
+    public synchronized void send(String user, Message m) {
         if (user == null) {
             return;
         }
-        for (SseEmitter emitter : streams.getOrDefault(user, Set.of())) {
-            try {
+        Set<SseEmitter> userStreams = streams.remove(user);
+        if (userStreams == null || userStreams.isEmpty()) {
+            pending.computeIfAbsent(user, u -> new ArrayList<>()).add(m);
+            return;
+        }
+        for (SseEmitter emitter : userStreams) {
+            deliver(emitter, List.of(m));
+        }
+    }
+
+    private void deliver(SseEmitter emitter, List<Message> messages) {
+        try {
+            for (Message m : messages) {
                 emitter.send(SseEmitter.event().name("notification").data(m));
-            } catch (IOException e) {
-                emitter.completeWithError(e);
             }
+            // API Gateway entrega la respuesta solo al cerrarse: cerramos para que llegue ya.
+            emitter.complete();
+        } catch (IOException e) {
+            emitter.completeWithError(e);
         }
     }
 }
+
+            // 
