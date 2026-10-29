@@ -2,8 +2,10 @@ package com.cloudnative.ms_notifications.Config;
 
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
+import org.springframework.amqp.core.DirectExchange;
 import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.core.Queue;
+import org.springframework.amqp.core.QueueBuilder;
 import org.springframework.amqp.support.converter.JacksonJsonMessageConverter;
 import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.beans.factory.annotation.Value;
@@ -32,12 +34,39 @@ public class RabbitConfig {
     }
 
     /**
-     * Cola durable (true): sobrevive al reinicio del broker.
-     * Con false, los mensajes se perderian al reiniciar RabbitMQ.
+     * Cola durable: sobrevive al reinicio del broker.
+     * Los mensajes rechazados (tras agotar reintentos) se reenvian al DLX.
      */
     @Bean
     public Queue accesosQueue() {
-        return new Queue(queueName, true);
+        return QueueBuilder.durable(queueName)
+                .deadLetterExchange(exchangeName + ".dlx")
+                .deadLetterRoutingKey(routingKey)
+                .build();
+    }
+
+    /**
+     * Exchange de dead letters: recibe los mensajes que el consumidor no pudo procesar.
+     */
+    @Bean
+    public DirectExchange deadLetterExchange() {
+        return new DirectExchange(exchangeName + ".dlx");
+    }
+
+    /**
+     * DLQ: guarda los mensajes fallidos para revisarlos o reprocesarlos a mano.
+     */
+    @Bean
+    public Queue deadLetterQueue() {
+        return QueueBuilder.durable(queueName + ".dlq").build();
+    }
+
+    @Bean
+    public Binding deadLetterBinding(Queue deadLetterQueue, DirectExchange deadLetterExchange) {
+        return BindingBuilder
+                .bind(deadLetterQueue)
+                .to(deadLetterExchange)
+                .with(routingKey);
     }
 
     /**
